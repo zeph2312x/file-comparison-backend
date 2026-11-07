@@ -198,10 +198,12 @@ def export_to_docx(result: ComparisonResult) -> io.BytesIO:
 
     elif result.summary.format == "JSON":
         doc.add_paragraph("File A JSON Content:")
-        doc.add_paragraph(result.baseline_view)
+        base_text = "\n".join(result.baseline_view) if isinstance(result.baseline_view, list) else str(result.baseline_view)
+        comp_text = "\n".join(result.comparison_view) if isinstance(result.comparison_view, list) else str(result.comparison_view)
+        doc.add_paragraph(base_text)
         doc.add_heading("Comparison File (B)", level=2)
         doc.add_paragraph("File B JSON Content:")
-        doc.add_paragraph(result.comparison_view)
+        doc.add_paragraph(comp_text)
 
     stream = io.BytesIO()
     doc.save(stream)

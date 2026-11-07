@@ -258,14 +258,16 @@ def compare_json_data(file_a_name: str, file_b_name: str, json_a: Any, json_b: A
         positional_notice="JSON keys compared by path; arrays compared by element index."
     )
 
-    baseline_formatted = json.dumps(json_a, indent=2)
-    comparison_formatted = json.dumps(json_b, indent=2)
+    baseline_lines = json.dumps(json_a, indent=2).splitlines()
+    comparison_lines = json.dumps(json_b, indent=2).splitlines()
 
+    # Map paths to diff types for line-matching in JSON
+    # We will pass both formatted string lines and the change list to highlight
     return ComparisonResult(
         summary=summary,
         changes=changes,
-        baseline_view=baseline_formatted,
-        comparison_view=comparison_formatted
+        baseline_view=baseline_lines,
+        comparison_view=comparison_lines
     )
 
 
