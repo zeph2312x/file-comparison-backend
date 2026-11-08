@@ -1,7 +1,42 @@
 import difflib
 import json
+import re
 from typing import Any, Dict, List, Tuple
 from app.models import ChangeItem, ChangeType, ComparisonResult, DiffSummary
+
+
+def compute_word_diff_chunks(text_a: str, text_b: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Tokenizes two modified lines into words/whitespace and produces chunks with highlight flags."""
+    # Split into words, spaces, and punctuation tokens preserving exact characters
+    tokens_a = re.findall(r"\w+|\s+|[^\w\s]", text_a)
+    tokens_b = re.findall(r"\w+|\s+|[^\w\s]", text_b)
+
+    matcher = difflib.SequenceMatcher(None, tokens_a, tokens_b)
+    chunks_a = []
+    chunks_b = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        part_a = "".join(tokens_a[i1:i2])
+        part_b = "".join(tokens_b[j1:j2])
+
+        if tag == "equal":
+            if part_a:
+                chunks_a.append({"text": part_a, "highlight": False})
+            if part_b:
+                chunks_b.append({"text": part_b, "highlight": False})
+        elif tag == "replace":
+            if part_a:
+                chunks_a.append({"text": part_a, "highlight": True})
+            if part_b:
+                chunks_b.append({"text": part_b, "highlight": True})
+        elif tag == "delete":
+            if part_a:
+                chunks_a.append({"text": part_a, "highlight": True})
+        elif tag == "insert":
+            if part_b:
+                chunks_b.append({"text": part_b, "highlight": True})
+
+    return chunks_a, chunks_b
 
 
 def compare_csv_data(
@@ -304,14 +339,25 @@ def compare_txt_data(file_a_name: str, file_b_name: str, lines_a: List[str], lin
 
                 if orig_text is not None and upd_text is not None:
                     total_modified += 1
+                    chunks_a, chunks_b = compute_word_diff_chunks(orig_text, upd_text)
                     changes.append(ChangeItem(
                         type=ChangeType.MODIFIED,
                         location=f"Line {orig_no} -> {upd_no}",
                         original_value=orig_text,
                         updated_value=upd_text
                     ))
-                    aligned_a.append({"line_num": orig_no, "text": orig_text, "type": ChangeType.MODIFIED.value})
-                    aligned_b.append({"line_num": upd_no, "text": upd_text, "type": ChangeType.MODIFIED.value})
+                    aligned_a.append({
+                        "line_num": orig_no,
+                        "text": orig_text,
+                        "type": ChangeType.MODIFIED.value,
+                        "chunks": chunks_a
+                    })
+                    aligned_b.append({
+                        "line_num": upd_no,
+                        "text": upd_text,
+                        "type": ChangeType.MODIFIED.value,
+                        "chunks": chunks_b
+                    })
                 elif orig_text is not None:
                     total_removed += 1
                     changes.append(ChangeItem(
