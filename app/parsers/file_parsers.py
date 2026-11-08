@@ -24,7 +24,7 @@ def parse_csv(content: bytes) -> Tuple[List[str], List[List[str]]]:
         except Exception as e:
             raise FileValidationError(f"Could not decode CSV text: {str(e)}")
 
-    lines = [line for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         raise FileValidationError("CSV file contains no valid rows.")
 
@@ -33,11 +33,18 @@ def parse_csv(content: bytes) -> Tuple[List[str], List[List[str]]]:
     if not all_rows:
         raise FileValidationError("CSV file contains no readable data.")
 
+    # Trim leading/trailing whitespace from headers and cells
     headers = [h.strip() for h in all_rows[0]]
     if len(headers) != len(set(headers)):
         raise FileValidationError("CSV file contains duplicate column headers which are ambiguous.")
 
-    data_rows = all_rows[1:]
+    data_rows = []
+    for r in all_rows[1:]:
+        cleaned_row = [c.strip() for c in r]
+        # Ignore rows that are entirely empty
+        if any(cleaned_row):
+            data_rows.append(cleaned_row)
+
     return headers, data_rows
 
 
@@ -67,4 +74,8 @@ def parse_txt(content: bytes) -> List[str]:
 
     # Normalize line endings CRLF -> LF
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized.split("\n")
+    # Strip empty/whitespace-only lines and strip trailing whitespace on each line
+    lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    if not lines:
+        raise FileValidationError("Text file contains no readable content.")
+    return lines
