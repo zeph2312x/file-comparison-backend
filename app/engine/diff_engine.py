@@ -39,6 +39,9 @@ def compute_word_diff_chunks(text_a: str, text_b: str) -> Tuple[List[Dict[str, A
     return chunks_a, chunks_b
 
 
+from app.engine.key_detector import find_candidate_key_column
+
+
 def compare_csv_data(
     file_a_name: str,
     file_b_name: str,
@@ -86,96 +89,203 @@ def compare_csv_data(
     col_index_a = {h: i for i, h in enumerate(headers_a)}
     col_index_b = {h: i for i, h in enumerate(headers_b)}
 
-    max_rows = max(len(rows_a), len(rows_b))
+    key_column = find_candidate_key_column(headers_a, headers_b, rows_a, rows_b)
     baseline_view_rows = []
     comparison_view_rows = []
 
-    for r_idx in range(max_rows):
-        has_a = r_idx < len(rows_a)
-        has_b = r_idx < len(rows_b)
-        row_num = r_idx + 1
+    if key_column:
+        key_idx_a = col_index_a[key_column]
+        key_idx_b = col_index_b[key_column]
 
-        row_a_cells = []
-        row_b_cells = []
+        dict_a = {r[key_idx_a]: r for r in rows_a if key_idx_a < len(r)}
+        dict_b = {r[key_idx_b]: r for r in rows_b if key_idx_b < len(r)}
 
-        if has_a and not has_b:
-            total_removed += 1
-            changes.append(ChangeItem(
-                type=ChangeType.REMOVED,
-                location=f"Row {row_num}",
-                original_value=", ".join(rows_a[r_idx]),
-                updated_value=None,
-                details="Entire row removed in File B"
-            ))
-            for h in all_headers:
-                val_a = rows_a[r_idx][col_index_a[h]] if h in col_index_a and col_index_a[h] < len(rows_a[r_idx]) else ""
-                row_a_cells.append({"value": val_a, "type": ChangeType.REMOVED.value})
-                row_b_cells.append({"value": "", "type": "empty"})
+        # Preserve order: start with A keys, then append new B keys
+        all_keys = []
+        for r in rows_a:
+            if key_idx_a < len(r) and r[key_idx_a] not in all_keys:
+                all_keys.append(r[key_idx_a])
+        for r in rows_b:
+            if key_idx_b < len(r) and r[key_idx_b] not in all_keys:
+                all_keys.append(r[key_idx_b])
 
-        elif not has_a and has_b:
-            total_added += 1
-            changes.append(ChangeItem(
-                type=ChangeType.ADDED,
-                location=f"Row {row_num}",
-                original_value=None,
-                updated_value=", ".join(rows_b[r_idx]),
-                details="Entire row added in File B"
-            ))
-            for h in all_headers:
-                val_b = rows_b[r_idx][col_index_b[h]] if h in col_index_b and col_index_b[h] < len(rows_b[r_idx]) else ""
-                row_a_cells.append({"value": "", "type": "empty"})
-                row_b_cells.append({"value": val_b, "type": ChangeType.ADDED.value})
+        for key_val in all_keys:
+            has_a = key_val in dict_a
+            has_b = key_val in dict_b
+            row_data_a = dict_a.get(key_val)
+            row_data_b = dict_b.get(key_val)
 
-        else:
-            # Both rows exist: cell-by-cell comparison
-            row_data_a = rows_a[r_idx]
-            row_data_b = rows_b[r_idx]
+            row_a_cells = []
+            row_b_cells = []
 
-            for h in all_headers:
-                in_a = h in col_index_a and col_index_a[h] < len(row_data_a)
-                in_b = h in col_index_b and col_index_b[h] < len(row_data_b)
-
-                val_a = row_data_a[col_index_a[h]] if in_a else ""
-                val_b = row_data_b[col_index_b[h]] if in_b else ""
-
-                if in_a and not in_b:
-                    total_removed += 1
+            if has_a and not has_b:
+                total_removed += 1
+                changes.append(ChangeItem(
+                    type=ChangeType.REMOVED,
+                    location=f"Record [{key_column}={key_val}]",
+                    original_value=", ".join(row_data_a),
+                    updated_value=None,
+                    details=f"Row with {key_column} '{key_val}' removed in File B"
+                ))
+                for h in all_headers:
+                    val_a = row_data_a[col_index_a[h]] if h in col_index_a and col_index_a[h] < len(row_data_a) else ""
                     row_a_cells.append({"value": val_a, "type": ChangeType.REMOVED.value})
                     row_b_cells.append({"value": "", "type": "empty"})
-                    changes.append(ChangeItem(
-                        type=ChangeType.REMOVED,
-                        location=f"Row {row_num}, Column {h}",
-                        original_value=val_a,
-                        updated_value=None
-                    ))
-                elif not in_a and in_b:
-                    total_added += 1
+
+            elif not has_a and has_b:
+                total_added += 1
+                changes.append(ChangeItem(
+                    type=ChangeType.ADDED,
+                    location=f"Record [{key_column}={key_val}]",
+                    original_value=None,
+                    updated_value=", ".join(row_data_b),
+                    details=f"Row with {key_column} '{key_val}' added in File B"
+                ))
+                for h in all_headers:
+                    val_b = row_data_b[col_index_b[h]] if h in col_index_b and col_index_b[h] < len(row_data_b) else ""
                     row_a_cells.append({"value": "", "type": "empty"})
                     row_b_cells.append({"value": val_b, "type": ChangeType.ADDED.value})
-                    changes.append(ChangeItem(
-                        type=ChangeType.ADDED,
-                        location=f"Row {row_num}, Column {h}",
-                        original_value=None,
-                        updated_value=val_b
-                    ))
-                else:
-                    if val_a == val_b:
-                        total_unchanged += 1
-                        row_a_cells.append({"value": val_a, "type": ChangeType.UNCHANGED.value})
-                        row_b_cells.append({"value": val_b, "type": ChangeType.UNCHANGED.value})
-                    else:
-                        total_modified += 1
-                        row_a_cells.append({"value": val_a, "type": ChangeType.MODIFIED.value})
-                        row_b_cells.append({"value": val_b, "type": ChangeType.MODIFIED.value})
+
+            else:
+                # Key exists in both files -> compare corresponding cells
+                for h in all_headers:
+                    in_a = h in col_index_a and col_index_a[h] < len(row_data_a)
+                    in_b = h in col_index_b and col_index_b[h] < len(row_data_b)
+
+                    val_a = row_data_a[col_index_a[h]] if in_a else ""
+                    val_b = row_data_b[col_index_b[h]] if in_b else ""
+
+                    if in_a and not in_b:
+                        total_removed += 1
+                        row_a_cells.append({"value": val_a, "type": ChangeType.REMOVED.value})
+                        row_b_cells.append({"value": "", "type": "empty"})
                         changes.append(ChangeItem(
-                            type=ChangeType.MODIFIED,
-                            location=f"Row {row_num}, Column {h}",
+                            type=ChangeType.REMOVED,
+                            location=f"Record [{key_column}={key_val}], Column {h}",
                             original_value=val_a,
+                            updated_value=None
+                        ))
+                    elif not in_a and in_b:
+                        total_added += 1
+                        row_a_cells.append({"value": "", "type": "empty"})
+                        row_b_cells.append({"value": val_b, "type": ChangeType.ADDED.value})
+                        changes.append(ChangeItem(
+                            type=ChangeType.ADDED,
+                            location=f"Record [{key_column}={key_val}], Column {h}",
+                            original_value=None,
                             updated_value=val_b
                         ))
+                    else:
+                        if val_a == val_b:
+                            total_unchanged += 1
+                            row_a_cells.append({"value": val_a, "type": ChangeType.UNCHANGED.value})
+                            row_b_cells.append({"value": val_b, "type": ChangeType.UNCHANGED.value})
+                        else:
+                            total_modified += 1
+                            row_a_cells.append({"value": val_a, "type": ChangeType.MODIFIED.value})
+                            row_b_cells.append({"value": val_b, "type": ChangeType.MODIFIED.value})
+                            changes.append(ChangeItem(
+                                type=ChangeType.MODIFIED,
+                                location=f"Record [{key_column}={key_val}], Column {h}",
+                                original_value=val_a,
+                                updated_value=val_b
+                            ))
 
-        baseline_view_rows.append(row_a_cells)
-        comparison_view_rows.append(row_b_cells)
+            baseline_view_rows.append(row_a_cells)
+            comparison_view_rows.append(row_b_cells)
+
+        notice = f"Key-based alignment active: matched records using '{key_column}' primary key."
+
+    else:
+        # Fallback to positional comparison if no suitable primary key is found
+        max_rows = max(len(rows_a), len(rows_b))
+        for r_idx in range(max_rows):
+            has_a = r_idx < len(rows_a)
+            has_b = r_idx < len(rows_b)
+            row_num = r_idx + 1
+
+            row_a_cells = []
+            row_b_cells = []
+
+            if has_a and not has_b:
+                total_removed += 1
+                changes.append(ChangeItem(
+                    type=ChangeType.REMOVED,
+                    location=f"Row {row_num}",
+                    original_value=", ".join(rows_a[r_idx]),
+                    updated_value=None,
+                    details="Entire row removed in File B"
+                ))
+                for h in all_headers:
+                    val_a = rows_a[r_idx][col_index_a[h]] if h in col_index_a and col_index_a[h] < len(rows_a[r_idx]) else ""
+                    row_a_cells.append({"value": val_a, "type": ChangeType.REMOVED.value})
+                    row_b_cells.append({"value": "", "type": "empty"})
+
+            elif not has_a and has_b:
+                total_added += 1
+                changes.append(ChangeItem(
+                    type=ChangeType.ADDED,
+                    location=f"Row {row_num}",
+                    original_value=None,
+                    updated_value=", ".join(rows_b[r_idx]),
+                    details="Entire row added in File B"
+                ))
+                for h in all_headers:
+                    val_b = rows_b[r_idx][col_index_b[h]] if h in col_index_b and col_index_b[h] < len(rows_b[r_idx]) else ""
+                    row_a_cells.append({"value": "", "type": "empty"})
+                    row_b_cells.append({"value": val_b, "type": ChangeType.ADDED.value})
+
+            else:
+                row_data_a = rows_a[r_idx]
+                row_data_b = rows_b[r_idx]
+
+                for h in all_headers:
+                    in_a = h in col_index_a and col_index_a[h] < len(row_data_a)
+                    in_b = h in col_index_b and col_index_b[h] < len(row_data_b)
+
+                    val_a = row_data_a[col_index_a[h]] if in_a else ""
+                    val_b = row_data_b[col_index_b[h]] if in_b else ""
+
+                    if in_a and not in_b:
+                        total_removed += 1
+                        row_a_cells.append({"value": val_a, "type": ChangeType.REMOVED.value})
+                        row_b_cells.append({"value": "", "type": "empty"})
+                        changes.append(ChangeItem(
+                            type=ChangeType.REMOVED,
+                            location=f"Row {row_num}, Column {h}",
+                            original_value=val_a,
+                            updated_value=None
+                        ))
+                    elif not in_a and in_b:
+                        total_added += 1
+                        row_a_cells.append({"value": "", "type": "empty"})
+                        row_b_cells.append({"value": val_b, "type": ChangeType.ADDED.value})
+                        changes.append(ChangeItem(
+                            type=ChangeType.ADDED,
+                            location=f"Row {row_num}, Column {h}",
+                            original_value=None,
+                            updated_value=val_b
+                        ))
+                    else:
+                        if val_a == val_b:
+                            total_unchanged += 1
+                            row_a_cells.append({"value": val_a, "type": ChangeType.UNCHANGED.value})
+                            row_b_cells.append({"value": val_b, "type": ChangeType.UNCHANGED.value})
+                        else:
+                            total_modified += 1
+                            row_a_cells.append({"value": val_a, "type": ChangeType.MODIFIED.value})
+                            row_b_cells.append({"value": val_b, "type": ChangeType.MODIFIED.value})
+                            changes.append(ChangeItem(
+                                type=ChangeType.MODIFIED,
+                                location=f"Row {row_num}, Column {h}",
+                                original_value=val_a,
+                                updated_value=val_b
+                            ))
+
+            baseline_view_rows.append(row_a_cells)
+            comparison_view_rows.append(row_b_cells)
+
+        notice = "Positional comparison used: rows are matched by their 1-based index."
 
     has_diffs = (total_added + total_modified + total_removed) > 0
     status = "Differences detected" if has_diffs else "No differences"
@@ -188,9 +298,9 @@ def compare_csv_data(
         total_added=total_added,
         total_modified=total_modified,
         total_removed=total_removed,
-        unit="cells/rows",
+        unit="cells/records",
         status=status,
-        positional_notice="Positional comparison used: rows are matched by their 1-based index."
+        positional_notice=notice
     )
 
     baseline_view = {"headers": all_headers, "rows": baseline_view_rows}
